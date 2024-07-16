@@ -24,7 +24,7 @@ AggregateVecPhysicalOperator::AggregateVecPhysicalOperator(vector<Expression *> 
   value_expressions_.reserve(aggregate_expressions_.size());
 
   ranges::for_each(aggregate_expressions_, [this](Expression *expr) {
-    auto *      aggregate_expr = static_cast<AggregateExpr *>(expr);
+    auto       *aggregate_expr = static_cast<AggregateExpr *>(expr);
     Expression *child_expr     = aggregate_expr->child().get();
     ASSERT(child_expr != nullptr, "aggregation expression must have a child expression");
     value_expressions_.emplace_back(child_expr);
@@ -88,25 +88,37 @@ RC AggregateVecPhysicalOperator::open(Trx *trx)
     rc = RC::SUCCESS;
   }
 
+  flag = false;
   return rc;
 }
 template <class STATE, typename T>
 void AggregateVecPhysicalOperator::update_aggregate_state(void *state, const Column &column)
 {
   STATE *state_ptr = reinterpret_cast<STATE *>(state);
-  T *    data      = (T *)column.data();
+  T     *data      = (T *)column.data();
   state_ptr->update(data, column.count());
 }
 
 RC AggregateVecPhysicalOperator::next(Chunk &chunk)
 {
   // your code here
-  exit(-1);
+  if (flag) {
+    // flag means not the first time
+    return RC::RECORD_EOF;
+  }
+
+  for (size_t aggr_idx = 0; aggr_idx < aggregate_expressions_.size(); aggr_idx++) {
+    output_chunk_.column_ptr(aggr_idx)->append_one((char *)aggr_values_.at(aggr_idx));
+  }
+  chunk.reference(output_chunk_);
+  flag = true;
+  return RC::SUCCESS;
 }
 
 RC AggregateVecPhysicalOperator::close()
 {
   children_[0]->close();
   LOG_INFO("close group by operator");
+  flag = false;
   return RC::SUCCESS;
 }

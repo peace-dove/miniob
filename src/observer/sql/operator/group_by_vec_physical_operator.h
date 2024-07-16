@@ -12,6 +12,8 @@ See the Mulan PSL v2 for more details. */
 
 #include "sql/expr/aggregate_hash_table.h"
 #include "sql/operator/physical_operator.h"
+#include "sql/expr/aggregate_state.h"
+#include "sql/expr/expression_tuple.h"
 
 /**
  * @brief Group By 物理算子(vectorized)
@@ -21,15 +23,23 @@ class GroupByVecPhysicalOperator : public PhysicalOperator
 {
 public:
   GroupByVecPhysicalOperator(
-      std::vector<std::unique_ptr<Expression>> &&group_by_exprs, std::vector<Expression *> &&expressions){};
+      std::vector<std::unique_ptr<Expression>> &&group_by_exprs, std::vector<Expression *> &&expressions)
+      : group_by_exprs_(std::move(group_by_exprs_)), aggregate_expressions_(std::move(expressions))
+  {
+    hash_table_ = new StandardAggregateHashTable(aggregate_expressions_);
+  };
 
-  virtual ~GroupByVecPhysicalOperator() = default;
+  ~GroupByVecPhysicalOperator() override { delete hash_table_; }
 
   PhysicalOperatorType type() const override { return PhysicalOperatorType::GROUP_BY_VEC; }
 
-  RC open(Trx *trx) override { return RC::UNIMPLENMENT; }
-  RC next(Chunk &chunk) override { return RC::UNIMPLENMENT; }
-  RC close() override { return RC::UNIMPLENMENT; }
+  RC open(Trx *trx) override;
+  RC next(Chunk &chunk) override;
+  RC close() override;
 
 private:
+  std::vector<std::unique_ptr<Expression>> group_by_exprs_;
+  std::vector<Expression *>                aggregate_expressions_;
+  Chunk                                    chunk_;
+  StandardAggregateHashTable              *hash_table_;
 };

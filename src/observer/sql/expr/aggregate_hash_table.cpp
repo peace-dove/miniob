@@ -14,8 +14,40 @@ See the Mulan PSL v2 for more details. */
 
 RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk)
 {
-  // your code here
-  exit(-1);
+  for (int i = 0; i < groups_chunk.rows(); i++) {
+    vector<Value> col_id(groups_chunk.column_num());
+    for (int j = 0; j < groups_chunk.column_num(); j++) {
+      col_id[j] = groups_chunk.get_value(j, i);
+    }
+
+    if (aggr_values_.find(col_id) != aggr_values_.end()) {
+      // if has been in the hashtable
+      // this is a vector for value
+      vector<Value> agg_value = aggr_values_[col_id];
+
+      for (size_t j = 0; j < agg_value.size(); j++) {
+        if (agg_value[j].attr_type() == AttrType::INTS) {
+          int old_val = agg_value[j].get_int();
+          agg_value[j] = Value(old_val + aggrs_chunk.get_value(j, i).get_int());
+        } else if (agg_value[j].attr_type() == AttrType::FLOATS) {
+          float old_val = agg_value[j].get_float();
+          agg_value[j] = Value(old_val + aggrs_chunk.get_value(j, i).get_float());
+        } else {
+          ASSERT(false, "Not supported data type.");
+        }
+      }
+      
+      aggr_values_[col_id] = agg_value;
+    } else {
+      // new in the hash table, new a value vector
+      vector<Value> agg_value(aggrs_chunk.column_num());
+      for (int j = 0; j < aggrs_chunk.column_num(); j++) {
+        agg_value[j] = aggrs_chunk.get_value(j, i);
+      }
+      aggr_values_[col_id] = agg_value;
+    }
+  }
+  return RC::SUCCESS;
 }
 
 void StandardAggregateHashTable::Scanner::open_scan()
