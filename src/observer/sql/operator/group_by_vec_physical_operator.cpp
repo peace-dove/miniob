@@ -38,7 +38,6 @@ RC GroupByVecPhysicalOperator::open(Trx *trx)
   }
 
   while (OB_SUCC(rc = child.next(chunk_))) {
-    // int   col_id = 0;
     // set group chunks
     Chunk group_chunks;
     for (size_t i = 0; i < group_by_exprs_.size(); i++) {
@@ -48,13 +47,6 @@ RC GroupByVecPhysicalOperator::open(Trx *trx)
       group_chunks.add_column(make_unique<Column>(col.attr_type(), col.attr_len()), i);
       group_chunks.column_ptr(i)->append(col.data(), col.count());
     }
-    // for (auto &group_expr : group_by_exprs_) {
-    //   Column col;
-    //   group_expr->get_column(chunk_, col);
-    //   group_chunks.add_column(make_unique<Column>(col.attr_type(), col.attr_len()), col_id);
-    //   group_chunks.column_ptr(col_id)->append(col.data(), col.count());
-    //   col_id++;
-    // }
 
     // set agg chunks
     Chunk aggrs_chunks;
@@ -66,14 +58,6 @@ RC GroupByVecPhysicalOperator::open(Trx *trx)
       aggrs_chunks.column_ptr(i)->append(col.data(), col.count());
     }
 
-    // int   col_id = 0;
-    // for (auto aggrs_expr : value_expressions_) {
-    //   Column col;
-    //   aggrs_expr->get_column(chunk_, col);
-    //   aggrs_chunks.add_column(make_unique<Column>(col.attr_type(), col.attr_len()), col_id);
-    //   aggrs_chunks.column_ptr(col_id)->append(col.data(), col.count());
-    //   col_id++;
-    // }
     rc = hash_table_->add_chunk(group_chunks, aggrs_chunks);
 
     if (OB_FAIL(rc)) {
@@ -98,17 +82,11 @@ RC GroupByVecPhysicalOperator::next(Chunk &chunk)
   }
 
   for (size_t i = 0; i < group_by_exprs_.size(); i++) {
-    // Column col;
-    // group_by_exprs_[i]->get_column(chunk_, col);
-    // chunk.add_column(make_unique<Column>(col.attr_type(), col.attr_len()), i);
     chunk.add_column(make_unique<Column>(group_by_exprs_[i]->value_type(), group_by_exprs_[i]->value_length()), i);
   }
 
   // continue add to chunk
   for (size_t i = 0; i < value_expressions_.size(); i++) {
-    // Column col;
-    // value_expressions_[i]->get_column(chunk_, col);
-    // chunk.add_column(make_unique<Column>(col.attr_type(), col.attr_len()), i + group_by_exprs_.size());
     chunk.add_column(make_unique<Column>(value_expressions_[i]->value_type(), value_expressions_[i]->value_length()),
         i + group_by_exprs_.size());
   }
