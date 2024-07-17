@@ -240,32 +240,220 @@ void LinearProbingAggregateHashTable<V>::resize_if_need()
   }
 }
 
+__m256i insert_by_index(__m256i keys, int value, int pos)
+{
+  switch (pos) {
+    case 0: return _mm256_insert_epi32(keys, value, 0);
+    case 1: return _mm256_insert_epi32(keys, value, 1);
+    case 2: return _mm256_insert_epi32(keys, value, 2);
+    case 3: return _mm256_insert_epi32(keys, value, 3);
+    case 4: return _mm256_insert_epi32(keys, value, 4);
+    case 5: return _mm256_insert_epi32(keys, value, 5);
+    case 6: return _mm256_insert_epi32(keys, value, 6);
+    case 7: return _mm256_insert_epi32(keys, value, 7);
+    default: ASSERT(false, "Index out of range.");
+  }
+}
+
+// int get_index(int key) {
+//     uint32_t hash = 0;
+//     uint8_t* ptr = reinterpret_cast<uint8_t*>(&key);
+
+//     for (size_t i = 0; i < sizeof(int); ++i) {
+//         hash += ptr[i];
+//         hash += (hash << 10);
+//         hash ^= (hash >> 6);
+//     }
+
+//     hash += (hash << 3);
+//     hash ^= (hash >> 11);
+//     hash += (hash << 15);
+
+//     return static_cast<int>(hash);
+// }
+
 template <typename V>
 void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_values, int len)
 {
   // your code here
-  exit(-1);
 
-  // inv (invalid) 表示是否有效，inv[i] = -1 表示有效，inv[i] = 0 表示无效。
-  // key[SIMD_WIDTH],value[SIMD_WIDTH] 表示当前循环中处理的键值对。
-  // off (offset) 表示线性探测冲突时的偏移量，key[i] 每次遇到冲突键，则off[i]++，如果key[i] 已经完成聚合，则off[i] = 0，
-  // i = 0 表示selective load 的起始位置。
-  // inv 全部初始化为 -1
-  // off 全部初始化为 0
+  // inv (invalid)表示是否有效, inv[i] = -1 表示有效, inv[i] = 0 表示无效.
+  // key[SIMD_WIDTH], value[SIMD_WIDTH] 表示当前循环中处理的键值对.
+  // off (offset)表示线性探测冲突时的偏移量, key[i]每次遇到冲突键, 则off[i]++，如果key[i]已经完成聚合，则off[i] = 0.
 
-  // for (; i + SIMD_WIDTH <= len;) {
+  // i = 0 表示selective load 的起始位置.
+  int i = 0;
+
+  // invalid, inv 全部初始化为 -1
+  int inv[SIMD_WIDTH];
+  memset(inv, -1, sizeof(inv));
+
+  // offset, off 全部初始化为 0
+  int off[SIMD_WIDTH];
+  memset(off, 0, sizeof(off));
+
+  __m256i keys       = _mm256_setzero_si256();
+  __m256i values     = _mm256_setzero_si256();
+  __m256i hash_vals  = _mm256_setzero_si256();
+  __m256i table_keys = _mm256_setzero_si256();
+
+  // for (; i + SIMD_WIDTH <= len;)
+  for (; i + SIMD_WIDTH <= len;) {
     // 1: 根据 `inv` 变量的值，从 `input_keys` 中 `selective load` `SIMD_WIDTH` 个不同的输入键值对。
-    // 2. 计算 i += |inv|, `|inv|` 表示 `inv` 中有效的个数 
-    // 3. 计算 hash 值，
-    // 4. 根据聚合类型（目前只支持 sum），在哈希表中更新聚合结果。如果本次循环，没有找到key[i] 在哈希表中的位置，则不更新聚合结果。
-    // 5. gather 操作，根据 hash 值将 keys_ 的 gather 结果写入 table_key 中。
-    // 6. 更新 inv 和 off。如果本次循环key[i] 聚合完成，则inv[i]=-1，表示该位置在下次循环中读取新的键值对。
-    // 如果本次循环 key[i] 未在哈希表中聚合完成（table_key[i] != key[i]），则inv[i] = 0，表示该位置在下次循环中不需要读取新的键值对。
-    // 如果本次循环中，key[i]聚合完成，则off[i] 更新为 0，表示线性探测偏移量为 0，key[i] 未完成聚合，则off[i]++,表示线性探测偏移量加 1。
-  // }
-  //7. 通过标量线性探测，处理剩余键值对
+    // 2. 计算 i += |inv|, `|inv|` 表示 `inv` 中有效的个数
+    for (int j = 0; j < SIMD_WIDTH; j++) {
+      if (inv[j] == -1 && i < len) {
+        // here, input_key is valid
 
-  // resize_if_need();
+        keys = insert_by_index(keys, input_keys[i], j);
+        // keys = _mm256_insert_epi32(keys, input_keys[i], j);
+        values = insert_by_index(values, input_values[i], j);
+        // values = _mm256_insert_epi32(values, input_values[i], j);
+
+        inv[j] = 0;  // set invalid
+        i++;
+      }
+    }
+
+    // 3. 计算 hash 值
+    for (int j = 0; j < SIMD_WIDTH; j++) {
+      if (inv[j] == 0) {
+        // it have been seted, invalid
+        int key      = mm256_extract_epi32_var_indx(keys, j);  // get key
+        int hash_val = get_index(key + off[j]);                // get index of key, input is key + off[j]
+        hash_vals    = insert_by_index(hash_vals, hash_val, j);
+
+        // 4.
+        // 根据聚合类型(目前sum), 在哈希表中更新聚合结果. 如果本次循环没有找到key[i]在哈希表中的位置, 则不更新聚合结果.
+        // keys_[hash_val] is key in memory, key is read from keys
+        if (keys_[hash_val] == key) {
+          // the key is here, so just add
+          // aggr fun is SUM, add to value
+          values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+          // 如果key[i]完成聚合, 则off[i] = 0
+          inv[j] = -1;
+          off[j] = 0;
+        }
+      }
+    }
+
+    // 4.
+    // 根据聚合类型(目前sum), 在哈希表中更新聚合结果. 如果本次循环没有找到key[i]在哈希表中的位置, 则不更新聚合结果.
+    // for (int j = 0; j < SIMD_WIDTH; j++) {
+    //   if (inv[j] == 0) {
+    //     // get key and related hash index
+    //     int key      = mm256_extract_epi32_var_indx(keys, j);
+    //     int hash_val = get_index(key + off[j]);
+
+    //     // keys_[hash_val] is key in memory, key is read from keys
+    //     if (keys_[hash_val] == key) {
+    //       // the key is here, so just add
+    //       // aggr fun is SUM, add to value
+    //       values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+    //       // 如果key[i]完成聚合, 则off[i] = 0
+    //       inv[j] = -1;
+    //       off[j] = 0;
+    //     }
+    //   }
+    // }
+
+    // 5. gather操作，根据 hash 值将 keys_ 的 gather 结果写入 table_key 中.
+
+    // __m256i _mm256_i32gather_epi32 (int const* base_addr, __m256i vindex, const int scale)
+    // Gather 32-bit integers from memory using 32-bit indices. 32-bit elements are loaded from addresses starting at
+    // base_addr and offset by each 32-bit element in vindex (each index is scaled by the factor in scale). Gathered
+    // elements are merged into dst. scale should be 1, 2, 4 or 8.
+
+    // memory: keys_.data(), vector<int>
+    // index: hash_vals, __m256i
+    // scale: 8, int
+    table_keys = _mm256_i32gather_epi32(keys_.data(), hash_vals, 8);
+
+    // 6. 更新 inv 和 off。
+    // 如果本次循环key[j]聚合完成(table_key[j] == key[j])，则inv[j]=-1，表示该位置在下次循环中读取新的键值对。
+    // 如果本次循环 key[j] 未在哈希表中聚合完成(table_key[j] != key[j]), 则inv[j]=0,
+    // 表示该位置在下次循环中不需要读取新的键值对.
+    // 如果本次循环中，key[j]聚合完成，则off[j]更新为0，表示线性探测偏移量为0，key[j] 未完成聚合，则off[j]++,
+    // 表示线性探测偏移量加1。
+    for (int j = 0; j < SIMD_WIDTH; j++) {
+      if (inv[j] == 0) {
+        // this place has value, first get related values
+        int key       = mm256_extract_epi32_var_indx(keys, j);
+        int hash_val  = mm256_extract_epi32_var_indx(hash_vals, j);
+        int table_key = mm256_extract_epi32_var_indx(table_keys, j);
+
+        if (table_key == EMPTY_KEY) {
+          // in memory, this is empty
+          if (keys_[hash_val] == EMPTY_KEY) {
+            keys_[hash_val]   = key;
+            values_[hash_val] = mm256_extract_epi32_var_indx(values, j);
+            inv[j]            = -1;
+            off[j]            = 0;
+            size_++;  // add a value
+          } else if (keys_[hash_val] != key) {
+            // not find it
+            off[j]++;
+            ASSERT(inv[j] == 0, "Not find, continue find.");
+          } else if (keys_[hash_val] == key) {
+            // find it, update sum
+            values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+            // this key is fine, so clear it
+            inv[j] = -1;
+            off[j] = 0;
+          } else {
+            ASSERT(false, "Should not be here.");
+          }
+        } else {
+          // table_key not empty, collide
+          off[j]++;
+        }
+      }
+    }
+  }
+
+  // Deal with the last part.
+  for (int j = 0; j < SIMD_WIDTH; j++) {
+    if (inv[j] == 0) {
+      // get key and related hash index
+      int key      = mm256_extract_epi32_var_indx(keys, j);
+      int hash_val = get_index(key + off[j]);
+
+      // keys_[hash_val] is key in memory, key is read from keys
+      if (keys_[hash_val] == key) {
+        // the key is here, so just add
+        // aggr fun is SUM, add to value
+        values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+        // 如果key[i]完成聚合, 则off[i] = 0
+        inv[j] = -1;
+        off[j] = 0;
+      }
+    }
+  }
+
+  // 7. 通过标量线性探测，处理剩余键值对
+  while (i < len) {
+    int key      = input_keys[i];
+    V   value    = input_values[i];
+    int hash_val = get_index(key);
+
+    while (keys_[hash_val] != EMPTY_KEY && keys_[hash_val] != key) {
+      // linear probe
+      hash_val = (hash_val + 1) % capacity_;
+    }
+
+    if (keys_[hash_val] == key) {
+      values_[hash_val] += value;
+    } else {
+      // keys_[hash_val] == EMPTY_KEY
+      // add it
+      keys_[hash_val]   = key;
+      values_[hash_val] = value;
+      size_++;
+    }
+    i++;
+  }
+
+  resize_if_need();
 }
 
 template <typename V>

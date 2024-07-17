@@ -35,7 +35,7 @@ public:
      */
     virtual RC next(Chunk &chunk) = 0;
 
-    virtual void close_scan(){};
+    virtual void close_scan() {};
 
   protected:
     AggregateHashTable *hash_table_;
@@ -141,6 +141,9 @@ public:
 
   int capacity() { return capacity_; }
   int size() { return size_; }
+
+  // LinearProbing
+  int get_index(int key) { return (key % capacity_ + capacity_) % capacity_; }
 
 private:
   /**
