@@ -107,9 +107,26 @@ RC AggregateVecPhysicalOperator::next(Chunk &chunk)
     return RC::RECORD_EOF;
   }
 
+  // output_chunk_.reset_data();
+  // chunk.reset();
   for (size_t aggr_idx = 0; aggr_idx < aggregate_expressions_.size(); aggr_idx++) {
-    output_chunk_.column_ptr(aggr_idx)->append_one((char *)aggr_values_.at(aggr_idx));
+    ASSERT(aggregate_expressions_[aggr_idx]->type() == ExprType::AGGREGATION, "expect aggregate expression");
+    auto *aggregate_expr = static_cast<AggregateExpr *>(aggregate_expressions_[aggr_idx]);
+    if (aggregate_expr->aggregate_type() == AggregateExpr::Type::SUM) {
+      if (aggregate_expr->value_type() == AttrType::INTS) {
+        // output_chunk_.add_column(make_unique<Column>(AttrType::INTS, sizeof(int)), aggr_idx);
+        output_chunk_.column_ptr(aggr_idx)->append_one((char *)aggr_values_.at(aggr_idx));
+      } else if (aggregate_expr->value_type() == AttrType::FLOATS) {
+        // output_chunk_.add_column(make_unique<Column>(AttrType::FLOATS, sizeof(float)), aggr_idx);
+        output_chunk_.column_ptr(aggr_idx)->append_one((char *)aggr_values_.at(aggr_idx));
+      } else {
+        ASSERT(false, "No support data type.");
+      }
+    } else {
+      ASSERT(false, "No support aggregation type.");
+    }
   }
+
   chunk.reference(output_chunk_);
   flag = true;
   return RC::SUCCESS;
