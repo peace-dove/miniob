@@ -27,16 +27,16 @@ RC StandardAggregateHashTable::add_chunk(Chunk &groups_chunk, Chunk &aggrs_chunk
 
       for (size_t j = 0; j < agg_value.size(); j++) {
         if (agg_value[j].attr_type() == AttrType::INTS) {
-          int old_val = agg_value[j].get_int();
+          int old_val  = agg_value[j].get_int();
           agg_value[j] = Value(old_val + aggrs_chunk.get_value(j, i).get_int());
         } else if (agg_value[j].attr_type() == AttrType::FLOATS) {
           float old_val = agg_value[j].get_float();
-          agg_value[j] = Value(old_val + aggrs_chunk.get_value(j, i).get_float());
+          agg_value[j]  = Value(old_val + aggrs_chunk.get_value(j, i).get_float());
         } else {
           ASSERT(false, "Not supported data type.");
         }
       }
-      
+
       aggr_values_[col_id] = agg_value;
     } else {
       // new in the hash table, new a value vector
