@@ -255,23 +255,6 @@ __m256i insert_by_index(__m256i keys, int value, int pos)
   }
 }
 
-// int get_index(int key) {
-//     uint32_t hash = 0;
-//     uint8_t* ptr = reinterpret_cast<uint8_t*>(&key);
-
-//     for (size_t i = 0; i < sizeof(int); ++i) {
-//         hash += ptr[i];
-//         hash += (hash << 10);
-//         hash ^= (hash >> 6);
-//     }
-
-//     hash += (hash << 3);
-//     hash ^= (hash >> 11);
-//     hash += (hash << 15);
-
-//     return static_cast<int>(hash);
-// }
-
 template <typename V>
 void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_values, int len)
 {
@@ -319,9 +302,10 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
     for (int j = 0; j < SIMD_WIDTH; j++) {
       if (inv[j] == 0) {
         // it have been seted, invalid
-        int key      = mm256_extract_epi32_var_indx(keys, j);  // get key
-        int hash_val = get_index(key + off[j]);                // get index of key, input is key + off[j]
-        hash_vals    = insert_by_index(hash_vals, hash_val, j);
+        int key = mm256_extract_epi32_var_indx(keys, j);  // get key
+        int hash_val =
+            ((key + off[j]) % capacity() + capacity()) % capacity();  // get index of key, input is key + off[j]
+        hash_vals = insert_by_index(hash_vals, hash_val, j);
 
         // 4.
         // 根据聚合类型(目前sum), 在哈希表中更新聚合结果. 如果本次循环没有找到key[i]在哈希表中的位置, 则不更新聚合结果.
@@ -336,26 +320,6 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
         }
       }
     }
-
-    // 4.
-    // 根据聚合类型(目前sum), 在哈希表中更新聚合结果. 如果本次循环没有找到key[i]在哈希表中的位置, 则不更新聚合结果.
-    // for (int j = 0; j < SIMD_WIDTH; j++) {
-    //   if (inv[j] == 0) {
-    //     // get key and related hash index
-    //     int key      = mm256_extract_epi32_var_indx(keys, j);
-    //     int hash_val = get_index(key + off[j]);
-
-    //     // keys_[hash_val] is key in memory, key is read from keys
-    //     if (keys_[hash_val] == key) {
-    //       // the key is here, so just add
-    //       // aggr fun is SUM, add to value
-    //       values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
-    //       // 如果key[i]完成聚合, 则off[i] = 0
-    //       inv[j] = -1;
-    //       off[j] = 0;
-    //     }
-    //   }
-    // }
 
     // 5. gather操作，根据 hash 值将 keys_ 的 gather 结果写入 table_key 中.
 
@@ -415,8 +379,9 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
   for (int j = 0; j < SIMD_WIDTH; j++) {
     if (inv[j] == 0) {
       // get key and related hash index
-      int key      = mm256_extract_epi32_var_indx(keys, j);
-      int hash_val = get_index(key + off[j]);
+      int key = mm256_extract_epi32_var_indx(keys, j);
+      int hash_val =
+          ((key + off[j]) % capacity() + capacity()) % capacity();  // get index of key, input is key + off[j]
 
       // keys_[hash_val] is key in memory, key is read from keys
       if (keys_[hash_val] == key) {
@@ -434,7 +399,7 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
   while (i < len) {
     int key      = input_keys[i];
     V   value    = input_values[i];
-    int hash_val = get_index(key);
+    int hash_val = (key % capacity() + capacity()) % capacity();
 
     while (keys_[hash_val] != EMPTY_KEY && keys_[hash_val] != key) {
       // linear probe
