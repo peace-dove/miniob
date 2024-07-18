@@ -32,8 +32,8 @@ public:
   RC close() override;
 
 private:
-  std::vector<Expression *>                   aggregate_expressions_;  //
-  std::vector<Expression *>                   value_expressions_;      //
+  std::vector<Expression *>                   aggregate_expressions_;  // aggr expr, from expressions
+  std::vector<Expression *>                   value_expressions_;      // reserve from aggregate_expressions_
   std::vector<std::unique_ptr<Expression>>    group_by_exprs_;         // group by expressions
   Chunk                                       chunk_;
   std::unique_ptr<StandardAggregateHashTable> hash_table_;
