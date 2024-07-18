@@ -275,10 +275,10 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
   int off[SIMD_WIDTH];
   memset(off, 0, sizeof(off));
 
-  __m256i keys       = _mm256_setzero_si256();
-  __m256i values     = _mm256_setzero_si256();
-  __m256i hash_vals  = _mm256_setzero_si256();
-  __m256i table_keys = _mm256_setzero_si256();
+  __m256i keys        = _mm256_setzero_si256();  // vector for keys
+  __m256i values      = _mm256_setzero_si256();  // vector for values
+  __m256i hash_indexs = _mm256_setzero_si256();  // hash index from keys
+  __m256i table_keys  = _mm256_setzero_si256();  // use hash index to read from keys_
 
   // for (; i + SIMD_WIDTH <= len;)
   for (; i + SIMD_WIDTH <= len;) {
@@ -303,21 +303,21 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
       if (inv[j] == 0) {
         // it have been seted, invalid
         int key = mm256_extract_epi32_var_indx(keys, j);  // get key
-        int hash_val =
+        int hash_index =
             ((key + off[j]) % capacity() + capacity()) % capacity();  // get index of key, input is key + off[j]
-        hash_vals = insert_by_index(hash_vals, hash_val, j);
+        hash_indexs = insert_by_index(hash_indexs, hash_index, j);
 
         // 4.
         // 根据聚合类型(目前sum), 在哈希表中更新聚合结果. 如果本次循环没有找到key[i]在哈希表中的位置, 则不更新聚合结果.
-        // keys_[hash_val] is key in memory, key is read from keys
-        if (keys_[hash_val] == key) {
+        // keys_[hash_index] is key in memory, key is read from keys
+        if (keys_[hash_index] == key) {
           // the key is here, so just add
           // aggr fun is SUM, add to value
-          values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+          values_[hash_index] += mm256_extract_epi32_var_indx(values, j);
           // 如果key[i]完成聚合, 则off[i] = 0
           inv[j] = -1;
           off[j] = 0;
-        }
+        }  // else, not find, dont update
       }
     }
 
@@ -329,9 +329,10 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
     // elements are merged into dst. scale should be 1, 2, 4 or 8.
 
     // memory: keys_.data(), int *
-    // index: hash_vals, __m256i
-    // scale: 8, int
-    table_keys = _mm256_i32gather_epi32(keys_.data(), hash_vals, 8);
+    // index: hash_indexs, __m256i
+    // scale: 4, int, means 4 bytes offset
+    // return: __m256i
+    table_keys = _mm256_i32gather_epi32(keys_.data(), hash_indexs, 4);
 
     // 6. 更新inv和off.
     // 如果本次循环key[j]聚合完成(table_key[j] == key[j])，则inv[j]=-1，表示该位置在下次循环中读取新的键值对.
@@ -342,25 +343,26 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
     for (int j = 0; j < SIMD_WIDTH; j++) {
       if (inv[j] == 0) {
         // this place has value, first get related values
-        int key       = mm256_extract_epi32_var_indx(keys, j);
-        int hash_val  = mm256_extract_epi32_var_indx(hash_vals, j);
-        int table_key = mm256_extract_epi32_var_indx(table_keys, j);
+        int key        = mm256_extract_epi32_var_indx(keys, j);
+        int hash_index = mm256_extract_epi32_var_indx(hash_indexs, j);
+        int table_key  = mm256_extract_epi32_var_indx(table_keys, j);
 
         if (table_key == EMPTY_KEY) {
           // in memory, this is empty
-          if (keys_[hash_val] == EMPTY_KEY) {
-            keys_[hash_val]   = key;
-            values_[hash_val] = mm256_extract_epi32_var_indx(values, j);
-            inv[j]            = -1;
-            off[j]            = 0;
+          if (keys_[hash_index] == EMPTY_KEY) {
+            // both empty
+            keys_[hash_index]   = key;
+            values_[hash_index] = mm256_extract_epi32_var_indx(values, j);
+            inv[j]              = -1;
+            off[j]              = 0;
             size_++;  // add a value
-          } else if (keys_[hash_val] != key) {
-            // not find it
+          } else if (keys_[hash_index] != key) {
+            // not find it, add offset
             off[j]++;
             ASSERT(inv[j] == 0, "Not find, continue find.");
-          } else if (keys_[hash_val] == key) {
+          } else if (keys_[hash_index] == key) {
             // find it, update sum
-            values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+            values_[hash_index] += mm256_extract_epi32_var_indx(values, j);
             // this key is fine, so clear it
             inv[j] = -1;
             off[j] = 0;
@@ -380,14 +382,14 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
     if (inv[j] == 0) {
       // get key and related hash index
       int key = mm256_extract_epi32_var_indx(keys, j);
-      int hash_val =
+      int hash_index =
           ((key + off[j]) % capacity() + capacity()) % capacity();  // get index of key, input is key + off[j]
 
-      // keys_[hash_val] is key in memory, key is read from keys
-      if (keys_[hash_val] == key) {
+      // keys_[hash_index] is key in memory, key is read from keys
+      if (keys_[hash_index] == key) {
         // the key is here, so just add
         // aggr fun is SUM, add to value
-        values_[hash_val] += mm256_extract_epi32_var_indx(values, j);
+        values_[hash_index] += mm256_extract_epi32_var_indx(values, j);
         // 如果key[i]完成聚合, 则off[i] = 0
         inv[j] = -1;
         off[j] = 0;
@@ -397,23 +399,29 @@ void LinearProbingAggregateHashTable<V>::add_batch(int *input_keys, V *input_val
 
   // 7. 通过标量线性探测，处理剩余键值对
   while (i < len) {
-    int key      = input_keys[i];
-    V   value    = input_values[i];
-    int hash_val = (key % capacity() + capacity()) % capacity();
+    int key        = input_keys[i];
+    V   value      = input_values[i];
+    int hash_index = (key % capacity() + capacity()) % capacity();
 
-    while (keys_[hash_val] != EMPTY_KEY && keys_[hash_val] != key) {
+    int loop_index = 0;
+    while (keys_[hash_index] != EMPTY_KEY && keys_[hash_index] != key && loop_index < capacity()) {
       // linear probe
-      hash_val = (hash_val + 1) % capacity_;
+      hash_index = (hash_index + 1) % capacity();
+      loop_index++;
     }
 
-    if (keys_[hash_val] == key) {
-      values_[hash_val] += value;
+    if (loop_index == capacity()) {
+      ASSERT(false, "No space for keys.");
+    }
+
+    if (keys_[hash_index] == key) {
+      // find it
+      values_[hash_index] += value;
     } else {
-      // keys_[hash_val] == EMPTY_KEY
-      // add it
-      keys_[hash_val]   = key;
-      values_[hash_val] = value;
-      size_++;
+      // ASSERT(keys_[hash_index] == EMPTY_KEY, "Is empty.");
+      keys_[hash_index]   = key;
+      values_[hash_index] = value;
+      size_++;  // add a new key
     }
     i++;
   }
